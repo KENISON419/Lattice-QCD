@@ -3,8 +3,8 @@ TARGET = ising.x
 
 ##########
 
-CC  = icc
-CXX = icpc
+CC  ?= gcc
+CXX ?= g++
 
 CFLAGS   = -O3
 CXXFLAGS = -O3

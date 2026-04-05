@@ -16,7 +16,7 @@ double J = 0.0;
 double mu0 = 0.0;
 double T = 0.0;
 double H = 0.0;
-double beta = 0.0; // 1/T
+double beta_inv = 0.0; // 1/T
 //--------------------------------------------------------------------------
 
 //--------------------------------------------------------------------------
@@ -69,7 +69,7 @@ main(int argc, char* argv[])
     for(int iH = 0; iH <= n_H; iH++) {
       T = T_i + iT * T_sep;
       H = H_i + iH * H_sep;
-      beta = 1.0/T;
+      beta_inv = 1.0/T;
 
       vector<double> mag(2); // cen, err
       vector<double> mag_chi(2);
@@ -200,4 +200,3 @@ static void usage(void)
   exit(1);
 }
 //--------------------------------------------------------------------------
-
