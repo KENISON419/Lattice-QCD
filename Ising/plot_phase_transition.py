@@ -78,6 +78,45 @@ def theory_chi_1d(T: np.ndarray, J: float, mu0: float):
     return beta * (mu0 ** 2) * np.exp(2.0 * beta * J)
 
 
+def solve_mf_m_2d(T: float, H: np.ndarray, J: float, mu0: float):
+    z = 4.0  # coordination number for square lattice
+    m = np.zeros_like(H)
+    m_prev = -1.0
+    for i, h in enumerate(H):
+        x = m_prev
+        for _ in range(2000):
+            x_new = np.tanh((z * J * x + mu0 * h) / T)
+            if abs(x_new - x) < 1.0e-12:
+                x = x_new
+                break
+            x = x_new
+        m[i] = x
+        m_prev = x
+    return m
+
+
+def theory_chi_mf_2d(T: np.ndarray, J: float, mu0: float):
+    z = 4.0
+    chi = np.zeros_like(T)
+    for i, t in enumerate(T):
+        beta = 1.0 / t
+        Tc_mf = z * J
+        if t >= Tc_mf:
+            chi[i] = beta * (mu0 ** 2) / max(1.0e-12, (1.0 - beta * z * J))
+        else:
+            # spontaneous solution at h=0
+            m = 1.0
+            for _ in range(2000):
+                m_new = np.tanh((z * J * m) / t)
+                if abs(m_new - m) < 1.0e-12:
+                    m = m_new
+                    break
+                m = m_new
+            denom = 1.0 - beta * z * J * (1.0 - m * m)
+            chi[i] = beta * (mu0 ** 2) * (1.0 - m * m) / max(1.0e-12, denom)
+    return chi
+
+
 def theory_abs_m_2d(T: np.ndarray, J: float):
     Tc = 2.0 * J / math.log(1.0 + math.sqrt(2.0))
     m = np.zeros_like(T)
@@ -131,9 +170,12 @@ def main():
         H = np.array([r["H"] for r in rows])
         m = np.array([r["mag"] for r in rows])
         m_err = np.array([r["mag_err"] for r in rows])
-        plt.errorbar(H, m, yerr=m_err, marker="o", ms=3, lw=1.1, capsize=2, label=f"MC T={T:.3f}")
+        plt.errorbar(H, m, yerr=m_err, fmt="o", ms=3, capsize=2, linestyle="none", label=f"MC T={T:.3f}")
+        H_dense = np.linspace(H.min(), H.max(), 400)
         if ndim == 1:
-            plt.plot(H, theory_m_1d(T, H, J, mu0), lw=1.0, ls="--", label=f"1D exact T={T:.3f}")
+            plt.plot(H_dense, theory_m_1d(T, H_dense, J, mu0), lw=1.0, ls="--", label=f"1D exact T={T:.3f}")
+        else:
+            plt.plot(H_dense, solve_mf_m_2d(T, H_dense, J, mu0), lw=1.0, ls="--", label=f"2D mean-field T={T:.3f}")
     plt.axvline(0.0, color="k", ls="--", lw=0.8)
     plt.xlabel("h")
     plt.ylabel("m")
@@ -160,13 +202,14 @@ def main():
     chi_err = np.array([r["chi_err"] for r in t_rows])
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(T_arr, m_arr, yerr=m_err, marker="o", ms=3, lw=1.1, capsize=2, label="MC |m|")
+    plt.errorbar(T_arr, m_arr, yerr=m_err, fmt="o", ms=3, capsize=2, linestyle="none", label="MC |m|")
+    T_dense = np.linspace(T_arr.min(), T_arr.max(), 500)
     if ndim == 2:
-        m_theory, Tc = theory_abs_m_2d(T_arr, J)
-        plt.plot(T_arr, m_theory, lw=1.2, ls="--", label="2D exact |m| (h=0)")
+        m_theory, Tc = theory_abs_m_2d(T_dense, J)
+        plt.plot(T_dense, m_theory, lw=1.2, ls="--", label="2D exact |m| (h=0)")
         plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
     else:
-        plt.plot(T_arr, np.zeros_like(T_arr), lw=1.0, ls="--", label="1D exact |m|=0 (h=0)")
+        plt.plot(T_dense, np.zeros_like(T_dense), lw=1.0, ls="--", label="1D exact |m|=0 (h=0)")
     plt.xlabel("T")
     plt.ylabel("|m|")
     plt.title("Ising model: |m|-T at h=0 (jackknife error bars)")
@@ -177,11 +220,13 @@ def main():
     plt.savefig(mt_png, dpi=160)
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(T_arr, chi_arr, yerr=chi_err, marker="o", ms=3, lw=1.1, capsize=2, label="MC χ")
+    plt.errorbar(T_arr, chi_arr, yerr=chi_err, fmt="o", ms=3, capsize=2, linestyle="none", label="MC χ")
     if ndim == 1:
-        plt.plot(T_arr, theory_chi_1d(T_arr, J, mu0), lw=1.1, ls="--", label="1D exact χ (h=0)")
+        plt.plot(T_dense, theory_chi_1d(T_dense, J, mu0), lw=1.1, ls="--", label="1D exact χ (h=0)")
     elif ndim == 2:
-        _, Tc = theory_abs_m_2d(T_arr, J)
+        chi_theory = theory_chi_mf_2d(T_dense, J, mu0)
+        _, Tc = theory_abs_m_2d(T_dense, J)
+        plt.plot(T_dense, chi_theory, lw=1.1, ls="--", label="2D mean-field χ (h=0)")
         plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
     plt.xlabel("T")
     plt.ylabel("χ")
