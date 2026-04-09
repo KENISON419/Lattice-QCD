@@ -36,6 +36,19 @@ void calc_mag(vector<double>& mag, vector<double>& mag_mc)
   
 }
 
+void calc_abs_mag(vector<double>& abs_mag, vector<double>& mag_mc)
+{
+  const int n = (int)mag_mc.size();
+  vector<double> abs_mag_mc(n, 0.0);
+  for (int i = 0; i < n; i++) {
+    abs_mag_mc[i] = fabs(mag_mc[i]);
+  }
+
+  vector<double> abs_mag_jk;
+  calc_jackknife_nosuberr(abs_mag_jk, abs_mag_mc);
+  calc_jackknife_final(abs_mag, abs_mag_jk);
+}
+
 //--------------------------------------------------------------------------
 
 void calc_mag_chi(vector<double>& mag_chi, vector<double>& mag_mc)
