@@ -65,21 +65,7 @@ def run_sim(exe: Path, ndim: int, L: int, J: float, mu0: float, flg_init: int,
     return rows, therm_rows
 
 
-def theory_m_1d(T: float, H: np.ndarray, J: float, mu0: float):
-    beta = 1.0 / T
-    bh = beta * mu0 * H
-    num = np.sinh(bh)
-    den = np.sqrt(num * num + np.exp(-4.0 * beta * J))
-    return num / den
-
-
-def theory_chi_1d(T: np.ndarray, J: float, mu0: float):
-    beta = 1.0 / T
-    return beta * (mu0 ** 2) * np.exp(2.0 * beta * J)
-
-
-def solve_mf_m_2d(T: float, H: np.ndarray, J: float, mu0: float):
-    z = 4.0  # coordination number for square lattice
+def solve_mf_m(T: float, H: np.ndarray, J: float, mu0: float, z: float):
     m = np.zeros_like(H)
     m_prev = -1.0
     for i, h in enumerate(H):
@@ -95,13 +81,28 @@ def solve_mf_m_2d(T: float, H: np.ndarray, J: float, mu0: float):
     return m
 
 
-def theory_chi_mf_2d(T: np.ndarray, J: float, mu0: float):
-    z = 4.0
+def theory_abs_m_mf(T: np.ndarray, J: float, z: float):
+    m = np.zeros_like(T)
+    for i, t in enumerate(T):
+        if t >= z * J:
+            m[i] = 0.0
+            continue
+        x = 1.0
+        for _ in range(2000):
+            x_new = np.tanh((z * J * x) / t)
+            if abs(x_new - x) < 1.0e-12:
+                x = x_new
+                break
+            x = x_new
+        m[i] = abs(x)
+    return m
+
+
+def theory_chi_mf(T: np.ndarray, J: float, mu0: float, z: float):
     chi = np.zeros_like(T)
     for i, t in enumerate(T):
         beta = 1.0 / t
-        Tc_mf = z * J
-        if t >= Tc_mf:
+        if t >= z * J:
             chi[i] = beta * (mu0 ** 2) / max(1.0e-12, (1.0 - beta * z * J))
         else:
             # spontaneous solution at h=0
@@ -145,6 +146,7 @@ def main():
     J = 1.0
     mu0 = 1.0
     flg_init = 1
+    z = 2.0 * ndim
 
     if ndim == 2:
         Tc_ref = 2.0 * J / math.log(1.0 + math.sqrt(2.0))
@@ -170,12 +172,9 @@ def main():
         H = np.array([r["H"] for r in rows])
         m = np.array([r["mag"] for r in rows])
         m_err = np.array([r["mag_err"] for r in rows])
-        plt.errorbar(H, m, yerr=m_err, fmt="o", ms=3, capsize=2, linestyle="none", label=f"MC T={T:.3f}")
+        plt.errorbar(H, m, yerr=m_err, fmt="none", capsize=2, label=f"MC T={T:.3f}")
         H_dense = np.linspace(H.min(), H.max(), 400)
-        if ndim == 1:
-            plt.plot(H_dense, theory_m_1d(T, H_dense, J, mu0), lw=1.0, ls="--", label=f"1D exact T={T:.3f}")
-        else:
-            plt.plot(H_dense, solve_mf_m_2d(T, H_dense, J, mu0), lw=1.0, ls="--", label=f"2D mean-field T={T:.3f}")
+        plt.plot(H_dense, solve_mf_m(T, H_dense, J, mu0, z), lw=1.0, ls="--", label=f"Mean-field T={T:.3f}")
     plt.axvline(0.0, color="k", ls="--", lw=0.8)
     plt.xlabel("h")
     plt.ylabel("m")
@@ -202,14 +201,16 @@ def main():
     chi_err = np.array([r["chi_err"] for r in t_rows])
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(T_arr, m_arr, yerr=m_err, fmt="o", ms=3, capsize=2, linestyle="none", label="MC |m|")
+    plt.errorbar(T_arr, m_arr, yerr=m_err, fmt="none", capsize=2, label="MC |m|")
     T_dense = np.linspace(T_arr.min(), T_arr.max(), 500)
     if ndim == 2:
         m_theory, Tc = theory_abs_m_2d(T_dense, J)
         plt.plot(T_dense, m_theory, lw=1.2, ls="--", label="2D exact |m| (h=0)")
         plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
     else:
-        plt.plot(T_dense, np.zeros_like(T_dense), lw=1.0, ls="--", label="1D exact |m|=0 (h=0)")
+        Tc_mf = z * J
+        plt.plot(T_dense, theory_abs_m_mf(T_dense, J, z), lw=1.0, ls="--", label="Mean-field |m| (h=0)")
+        plt.axvline(Tc_mf, color="r", ls="--", lw=1.0, label=f"Mean-field Tc={Tc_mf:.3f}")
     plt.xlabel("T")
     plt.ylabel("|m|")
     plt.title("Ising model: |m|-T at h=0 (jackknife error bars)")
@@ -220,14 +221,11 @@ def main():
     plt.savefig(mt_png, dpi=160)
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(T_arr, chi_arr, yerr=chi_err, fmt="o", ms=3, capsize=2, linestyle="none", label="MC χ")
-    if ndim == 1:
-        plt.plot(T_dense, theory_chi_1d(T_dense, J, mu0), lw=1.1, ls="--", label="1D exact χ (h=0)")
-    elif ndim == 2:
-        chi_theory = theory_chi_mf_2d(T_dense, J, mu0)
-        _, Tc = theory_abs_m_2d(T_dense, J)
-        plt.plot(T_dense, chi_theory, lw=1.1, ls="--", label="2D mean-field χ (h=0)")
-        plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
+    plt.errorbar(T_arr, chi_arr, yerr=chi_err, fmt="none", capsize=2, label="MC χ")
+    chi_theory = theory_chi_mf(T_dense, J, mu0, z)
+    Tc_mf = z * J
+    plt.plot(T_dense, chi_theory, lw=1.1, ls="--", label="Mean-field χ (h=0)")
+    plt.axvline(Tc_mf, color="r", ls="--", lw=1.0, label=f"Mean-field Tc={Tc_mf:.3f}")
     plt.xlabel("T")
     plt.ylabel("χ")
     plt.title("Ising model: χ-T at h=0 (jackknife error bars)")
