@@ -8,7 +8,15 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-LINE_RE = re.compile(r"T=\s*([\-0-9.eE+]+)\s+H=\s*([\-0-9.eE+]+)\s+mag=\s*([\-0-9.eE+]+)")
+LINE_RE = re.compile(
+    r"T=\s*([\-0-9.eE+]+)\s+H=\s*([\-0-9.eE+]+)\s+"
+    r"mag=\s*([\-0-9.eE+]+)\s+mag_err=\s*([\-0-9.eE+]+)\s+"
+    r"abs_mag=\s*([\-0-9.eE+]+)\s+abs_mag_err=\s*([\-0-9.eE+]+)\s+"
+    r"mag_chi=\s*([\-0-9.eE+]+)\s+mag_chi_err=\s*([\-0-9.eE+]+)"
+)
+THERM_RE = re.compile(
+    r"THERM\s+T=\s*([\-0-9.eE+]+)\s+H=\s*([\-0-9.eE+]+)\s+step=\s*(\d+)\s+m=\s*([\-0-9.eE+]+)"
+)
 
 
 def run_sim(exe: Path, ndim: int, L: int, J: float, mu0: float, flg_init: int,
@@ -31,17 +39,58 @@ def run_sim(exe: Path, ndim: int, L: int, J: float, mu0: float, flg_init: int,
     out = subprocess.check_output(cmd, text=True)
 
     rows = []
+    therm_rows = []
     for line in out.splitlines():
         m = LINE_RE.search(line)
-        if not m:
+        if m:
+            rows.append({
+                "T": float(m.group(1)),
+                "H": float(m.group(2)),
+                "mag": float(m.group(3)),
+                "mag_err": float(m.group(4)),
+                "abs_mag": float(m.group(5)),
+                "abs_mag_err": float(m.group(6)),
+                "chi": float(m.group(7)),
+                "chi_err": float(m.group(8)),
+            })
             continue
-        rows.append((float(m.group(1)), float(m.group(2)), float(m.group(3))))
-    return rows
+        t = THERM_RE.search(line)
+        if t:
+            therm_rows.append({
+                "T": float(t.group(1)),
+                "H": float(t.group(2)),
+                "step": int(t.group(3)),
+                "m": float(t.group(4)),
+            })
+    return rows, therm_rows
+
+
+def theory_m_1d(T: float, H: np.ndarray, J: float, mu0: float):
+    beta = 1.0 / T
+    bh = beta * mu0 * H
+    num = np.sinh(bh)
+    den = np.sqrt(num * num + np.exp(-4.0 * beta * J))
+    return num / den
+
+
+def theory_chi_1d(T: np.ndarray, J: float, mu0: float):
+    beta = 1.0 / T
+    return beta * (mu0 ** 2) * np.exp(2.0 * beta * J)
+
+
+def theory_abs_m_2d(T: np.ndarray, J: float):
+    Tc = 2.0 * J / math.log(1.0 + math.sqrt(2.0))
+    m = np.zeros_like(T)
+    mask = T < Tc
+    x = np.sinh(2.0 * J / T[mask])
+    m[mask] = np.power(1.0 - np.power(x, -4.0), 1.0 / 8.0)
+    return m, Tc
 
 
 def main():
     ap = argparse.ArgumentParser(description="Generate Ising phase transition plots.")
     ap.add_argument("--exe", default="./ising.x", help="Path to executable")
+    ap.add_argument("--ndim", type=int, default=2, choices=[1, 2])
     ap.add_argument("--L", type=int, default=32)
     ap.add_argument("--n-therm", type=int, default=3000)
     ap.add_argument("--n-sweep", type=int, default=20)
@@ -53,18 +102,23 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    ndim = 2
+    ndim = args.ndim
     J = 1.0
     mu0 = 1.0
     flg_init = 1
 
-    Tc = 2.0 * J / math.log(1.0 + math.sqrt(2.0))
-    Ts = [0.90 * Tc, 1.10 * Tc]
+    if ndim == 2:
+        Tc_ref = 2.0 * J / math.log(1.0 + math.sqrt(2.0))
+    else:
+        Tc_ref = None
+    T_low = 1.2 if ndim == 1 else 0.90 * Tc_ref
+    T_high = 2.8 if ndim == 1 else 1.10 * Tc_ref
+    Ts = [T_low, T_high]
 
     # m-h curves for T below/above Tc
     h_rows = []
     for T in Ts:
-        rows = run_sim(
+        rows, _ = run_sim(
             exe, ndim, args.L, J, mu0, flg_init,
             args.n_therm, args.n_sweep, args.n_mc,
             T, T, 0,
@@ -74,50 +128,104 @@ def main():
 
     plt.figure(figsize=(8, 6))
     for T, rows in h_rows:
-        H = [r[1] for r in rows]
-        m = [r[2] for r in rows]
-        plt.plot(H, m, marker="o", ms=3, lw=1.3, label=f"T={T:.3f}")
+        H = np.array([r["H"] for r in rows])
+        m = np.array([r["mag"] for r in rows])
+        m_err = np.array([r["mag_err"] for r in rows])
+        plt.errorbar(H, m, yerr=m_err, marker="o", ms=3, lw=1.1, capsize=2, label=f"MC T={T:.3f}")
+        if ndim == 1:
+            plt.plot(H, theory_m_1d(T, H, J, mu0), lw=1.0, ls="--", label=f"1D exact T={T:.3f}")
     plt.axvline(0.0, color="k", ls="--", lw=0.8)
     plt.xlabel("h")
     plt.ylabel("m")
-    plt.title("Ising model: m-h curves around Tc")
+    plt.title("Ising model: m-h curves (jackknife error bars)")
     plt.legend()
     plt.grid(alpha=0.25)
     plt.tight_layout()
-    mh_png = outdir / "m_vs_h_around_Tc.png"
+    mh_png = outdir / "m_vs_h.png"
     plt.savefig(mh_png, dpi=160)
 
-    # m-T curve at h=0
-    t_rows = run_sim(
+    # m-T and chi-T curve at h=0
+    t_min = 0.4 if ndim == 1 else 1.2
+    t_max = 3.4
+    t_rows, _ = run_sim(
         exe, ndim, args.L, J, mu0, flg_init,
         args.n_therm, args.n_sweep, args.n_mc,
-        1.2, 3.4, 22,
+        t_min, t_max, 22,
         0.0, 0.0, 0,
     )
-    T_arr = np.array([r[0] for r in t_rows])
-    m_arr = np.abs(np.array([r[2] for r in t_rows]))
+    T_arr = np.array([r["T"] for r in t_rows])
+    m_arr = np.array([r["abs_mag"] for r in t_rows])
+    m_err = np.array([r["abs_mag_err"] for r in t_rows])
+    chi_arr = np.array([r["chi"] for r in t_rows])
+    chi_err = np.array([r["chi_err"] for r in t_rows])
 
     plt.figure(figsize=(8, 6))
-    plt.plot(T_arr, m_arr, marker="o", ms=3, lw=1.3)
-    plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"Tc={Tc:.3f}")
+    plt.errorbar(T_arr, m_arr, yerr=m_err, marker="o", ms=3, lw=1.1, capsize=2, label="MC |m|")
+    if ndim == 2:
+        m_theory, Tc = theory_abs_m_2d(T_arr, J)
+        plt.plot(T_arr, m_theory, lw=1.2, ls="--", label="2D exact |m| (h=0)")
+        plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
+    else:
+        plt.plot(T_arr, np.zeros_like(T_arr), lw=1.0, ls="--", label="1D exact |m|=0 (h=0)")
     plt.xlabel("T")
-    plt.ylabel("m")
-    plt.title("Ising model: m-T at h=0")
+    plt.ylabel("|m|")
+    plt.title("Ising model: |m|-T at h=0 (jackknife error bars)")
     plt.legend()
     plt.grid(alpha=0.25)
     plt.tight_layout()
     mt_png = outdir / "m_vs_T.png"
     plt.savefig(mt_png, dpi=160)
 
-    np.savetxt(
-        outdir / "m_vs_h_around_Tc.dat",
-        np.array([(t, h, m) for t, rows in h_rows for (_, h, m) in rows]),
-        header="T h m",
+    plt.figure(figsize=(8, 6))
+    plt.errorbar(T_arr, chi_arr, yerr=chi_err, marker="o", ms=3, lw=1.1, capsize=2, label="MC χ")
+    if ndim == 1:
+        plt.plot(T_arr, theory_chi_1d(T_arr, J, mu0), lw=1.1, ls="--", label="1D exact χ (h=0)")
+    elif ndim == 2:
+        _, Tc = theory_abs_m_2d(T_arr, J)
+        plt.axvline(Tc, color="r", ls="--", lw=1.0, label=f"2D exact Tc={Tc:.3f}")
+    plt.xlabel("T")
+    plt.ylabel("χ")
+    plt.title("Ising model: χ-T at h=0 (jackknife error bars)")
+    plt.legend()
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    chi_png = outdir / "chi_vs_T.png"
+    plt.savefig(chi_png, dpi=160)
+
+    therm_target_T = Tc_ref if ndim == 2 else 1.0
+    _, therm_rows = run_sim(
+        exe, ndim, args.L, J, mu0, flg_init,
+        args.n_therm, args.n_sweep, max(100, args.n_mc // 10),
+        therm_target_T, therm_target_T, 0,
+        0.0, 0.0, 0,
     )
-    np.savetxt(outdir / "m_vs_T.dat", np.column_stack([T_arr, m_arr]), header="T |m|")
+    therm_x = np.array([r["step"] for r in therm_rows], dtype=int)
+    therm_m = np.array([r["m"] for r in therm_rows])
+    plt.figure(figsize=(8, 6))
+    plt.plot(therm_x, therm_m, lw=1.0)
+    plt.xlabel("update count during thermalization")
+    plt.ylabel("m")
+    plt.title("Thermalization check: update count vs m")
+    plt.grid(alpha=0.25)
+    plt.tight_layout()
+    therm_png = outdir / "thermalization_m_vs_update.png"
+    plt.savefig(therm_png, dpi=160)
+
+    np.savetxt(
+        outdir / "m_vs_h.dat",
+        np.array([
+            (t, r["H"], r["mag"], r["mag_err"]) for t, rows in h_rows for r in rows
+        ]),
+        header="T h m m_err",
+    )
+    np.savetxt(outdir / "m_vs_T.dat", np.column_stack([T_arr, m_arr, m_err]), header="T |m| |m|_err")
+    np.savetxt(outdir / "chi_vs_T.dat", np.column_stack([T_arr, chi_arr, chi_err]), header="T chi chi_err")
+    np.savetxt(outdir / "thermalization_m_vs_update.dat", np.column_stack([therm_x, therm_m]), header="update m")
 
     print(f"Saved: {mh_png}")
     print(f"Saved: {mt_png}")
+    print(f"Saved: {chi_png}")
+    print(f"Saved: {therm_png}")
 
 
 if __name__ == "__main__":

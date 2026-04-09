@@ -27,8 +27,9 @@ static void set_args(int argc, char* argv[],
                      double& H_i, double& H_f, int& n_H);
 static void usage(void);
 //--------------------------------------------------------------------------
-void ising(vector<double>& mag, vector<double>& mag_chi,
+void ising(vector<double>& mag, vector<double>& abs_mag, vector<double>& mag_chi,
            vector<double>& E,   vector<double>& C_heat,
+           vector<double>& therm_mag,
            int flg_init, int n_therm, int n_seep, int n_mc);
 //--------------------------------------------------------------------------
 
@@ -72,21 +73,30 @@ main(int argc, char* argv[])
       beta_inv = 1.0/T;
 
       vector<double> mag(2); // cen, err
+      vector<double> abs_mag(2);
       vector<double> mag_chi(2);
       vector<double> E(2);
       vector<double> C_heat(2);
-      ising(mag, mag_chi, E, C_heat, flg_init, n_therm, n_sweep, n_mc);
+      vector<double> therm_mag;
+      ising(mag, abs_mag, mag_chi, E, C_heat, therm_mag,
+            flg_init, n_therm, n_sweep, n_mc);
 
       printf("T= %f H= %f "
              "mag= %f mag_err= %f "
+             "abs_mag= %f abs_mag_err= %f "
              "mag_chi= %f mag_chi_err= %f "
              "E= %f E_err= %f "
              "C_heat= %f C_heat_err= %f\n",
              T, H,
              mag[0], mag[1],
+             abs_mag[0], abs_mag[1],
              mag_chi[0], mag_chi[1],
              E[0], E[1],
              C_heat[0], C_heat[1]);
+
+      for (int it = 0; it < (int)therm_mag.size(); it++) {
+        printf("THERM T= %f H= %f step= %d m= %f\n", T, H, it + 1, therm_mag[it]);
+      }
     }
   }
 
